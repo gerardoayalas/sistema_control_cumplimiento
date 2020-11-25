@@ -9,8 +9,10 @@ INSERT INTO {summary_dataset} (
     id_sentido,
     hh_inicio,
     hh_fin,
+    hh_fin as hh_fin_prueba_mod
     kpi_cumplimiento_pc
 )
+-- prueba modificacion
 select
 	'{dataset_name}' as dataset_name,
 	'{gps_dataset}' as dataset_table_name,
