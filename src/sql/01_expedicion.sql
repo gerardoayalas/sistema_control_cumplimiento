@@ -1,17 +1,34 @@
+/*
+Expedition Query (Summary dataset)
+This query uses the Expedition result (Summary dataset) to know if some indicators were fulfilled.
+
+Notes:
+1. The comments must be inside / *  * /, as the interpreter will receive only one line string - - comments will lead to an error because
+the remaining query would be comented.
+2. Every string between {{}} (used twice for python formatting) are variables that are used and replaced by the script. Replacing the values
+inside with real data will make the script not working as desired.
+3. Executing this query will return an error because of the variables detailed above.
+4. The name of the query is used by the script to save a record inside Dataset Queries History with it. It is not used more than a
+readable way to identify the query.
+*/
+/*
+Insert all expedition data into Summary table for the given GPS dataset contract id. A difference from the Indicators query, here nested
+queries are used because of performance issues due to the big GPS datasets can lead to long query run time. Also, the use of indexes
+work better with nested queries than CTE for this particular case.
+*/
 INSERT INTO {summary_dataset} (
     dataset_name,
     dataset_table_name,
     id_contrato,
-    id_pc3,
+    id_expedicion,
+    id_pc,
     id_vehiculo,
     id_servicio,
     id_sentido,
     hh_inicio,
     hh_fin,
-    hh_fin as hh_fin_prueba_mod
     kpi_cumplimiento_pc
 )
--- prueba modificacion
 select
 	'{dataset_name}' as dataset_name,
 	'{gps_dataset}' as dataset_table_name,
@@ -25,6 +42,7 @@ select
     hh_fin,
     kpi_cumplimiento_pc
 from (
+    /*Cleaning output*/
     select
         distinct on (id_vehiculo, hh_fin)
         id_expedicion,
@@ -38,6 +56,7 @@ from (
     	traslapes,
     	basura
     from (
+        /*Cleaning output*/
         select
             distinct on (id_vehiculo, hh_inicio)
             id_expedicion,
@@ -51,6 +70,7 @@ from (
         	traslapes,
         	basura
         from (
+            /*Summary of all data and checking if there are overlaps.*/
             select
                 e0.id_expedicion,
                 e0.id_pc,
@@ -74,6 +94,7 @@ from (
                     else 0
                 end as traslapes
             from (
+                /*Get All Expedition data and adding event hours with the fulfilment for the control point.*/
                 select
                     epc.id_expedicion,
                     epc.id_pc,
@@ -93,6 +114,7 @@ from (
                     end as basura,
                     1 as check_traslape_salida
                 from (
+                    /*Cleaning data and complete the remaining data with the GPS dataset data.*/
                     select distinct on (eid.id_pc, eid.id_vehiculo, eid.id_servicio, eid.id_sentido, eid.id_expedicion, eid.n_pc)    
                         eid.fe_fecha,
                         eid.id_pc,
@@ -106,6 +128,7 @@ from (
                         gps.fechahora_local,
                         eid.basura
                     from (
+                        /*Get Expedition data and adding a unique ID for the expedition event*/
                         select
                             fe_fecha,
                             id_pc,
@@ -118,6 +141,7 @@ from (
                             sum(inicio_recorrido) over (order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps rows between unbounded preceding and current row) as id_expedicion,
                             basura
                         from (
+                            /*Get the start of the Event's path.*/
                             select
                                 fe_fecha,
                                 id_pc,
@@ -142,6 +166,7 @@ from (
                                     else 0
                                 end as basura
                             from (
+                                /*Check the Event PC validity.*/
                                 select
                                     fe_fecha,
                                     id_pc,
@@ -159,6 +184,7 @@ from (
                                         else true
                                     end as control_valido
                                 from (
+                                    /*Event PC which determines event state for the given PC based on the GPS information.*/
                                     select
                                         fe_fecha,
                                         id_pc,
@@ -167,24 +193,25 @@ from (
                                         id_sentido,
                                         n_pc,
                                         id_gps,
-                                    case
-                                        when lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) is null then
-                                            case
-                                                when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) then 11
-                                                else 1
-                                            end
-                                        when lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) is null then
-                                            case
-                                                when id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) then 11
-                                                else -1
-                                            end
-                                        when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
-                                            and id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) then 11
-                                        when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) then -1
-                                        when id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) then 1
-                                        else 0
+                                        case
+                                            when lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) is null then
+                                                case
+                                                    when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) then 11
+                                                    else 1
+                                                end
+                                            when lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) is null then
+                                                case
+                                                    when id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) then 11
+                                                    else -1
+                                                end
+                                            when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
+                                                and id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) then 11
+                                            when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) then -1
+                                            when id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) then 1
+                                            else 0
                                         end as estado_evento
                                     from (
+                                        /*Get GPS for each day in PC_CA including if the GPS Point is within the PC_CA radius.*/
                                         select
                                             gps.fe_fecha,
                                             pc_ca.id_pc,
@@ -195,6 +222,7 @@ from (
                                             gps.id_gps,
                                             ST_DWithin(gps.point_gps::geography, pc_ca.point_pc::geography, pc_ca.radio) as dentro_pc
                                         from (
+                                            /*Get bus id related data from GPS dataset and transforming longitude and latitude to a Point.*/
                                             select
                                                 row_number () over(partition by ppu order by ppu, gps_fecha_hora_chile) as id_gps,
                                                 ppu as id_vehiculo,
@@ -205,6 +233,7 @@ from (
                                             order by ppu, gps_fecha_hora_chile
                                         ) gps
                                         join (
+                                            /*Get PC_CA from the join between PO_CA and PC*/
                                             select distinct on (po_ca.id_pc, po_ca.fe_fecha, pc.id_servicio, pc.id_sentido, pc.n_pc)
                                                 po_ca.id_contrato,
                                                 po_ca.fe_fecha,
@@ -215,6 +244,11 @@ from (
                                                 pc.radio,
                                                 ST_MakePoint(pc.lon::numeric, pc.lat::numeric) as point_pc
                                             from (
+                                                /*
+                                                Get PC_CA from the join between POE and POE for the given contract ID.
+                                                The result includes a range of dates with the operational plan for each day,
+                                                including if the plan has exceptions for only some days.
+                                                */
                                                 select
                                                     poe.id_contrato,
                                                     poe.fe_fecha,
