@@ -1,3 +1,17 @@
+/*
+Indicators Query (Indicadores dataset)
+This query uses the Expedition result (Summary dataset) to know if some indicators were fulfilled.
+
+Notes:
+1. The comments must be inside / *  * /, as the interpreter will receive only one line string - - comments will lead to an error because
+the remaining query would be comented.
+2. Every string between {{}} (used twice for python formatting) are variables that are used and replaced by the script. Replacing the values
+inside with real data will make the script not working as desired.
+3. Executing this query will return an error because of the variables detailed above.
+4. The name of the query is used by the script to save a record inside Dataset Queries History with it. It is not used more than a
+readable way to identify the query.
+*/
+/*Get all data from Expedition (Summary dataset) based on the contract ID and a range of dates.*/
 with
 expedicion as (
     select
@@ -14,6 +28,10 @@ expedicion as (
     where id_contrato = '{contract_id}'
     	and hh_inicio::date between '{start_date}' and '{end_date}'
 ),
+/*
+Get PO dataset data between the range of dates passed and the given contract ID.
+Creates a new table with every day between the range of dates including the data of the PO for each day.
+*/
 po as(
     select po.id_contrato,
         fechas.fe_fecha,
@@ -26,6 +44,9 @@ po as(
     on fechas.fe_fecha between po.fecha_inicio and po.fecha_fin
     where po.id_contrato = '{contract_id}'
 ),
+/*
+Get POE dataset data between the range of dates passed and the given contract ID.
+*/
 poe as(
     select
        id_contrato,
@@ -38,6 +59,9 @@ poe as(
 	where id_contrato = '{contract_id}'
     	and fecha between '{start_date}' and '{end_date}'
 ),
+/*
+Join PO and POE outputs to have the whole list of days with the PO data and the POE for the exception days.
+*/
 po_ca as(
     select
         poe.id_contrato,
@@ -61,6 +85,9 @@ po_ca as(
         and poe.fe_fecha = po.fe_fecha
         where poe.id_contrato is null
 ),
+/*
+Get IT data and join it with PO_CA data to have all itinerary data for every day as well.
+*/
 it_ca as(
     select
     	row_number() over(order by po_ca.id_contrato,po_ca.fe_fecha,po_ca.id_po,po_ca.id_it,it.id_servicio,it.id_sentido, it.n_pc, it.hh_control) as id_it_ca,
@@ -92,6 +119,9 @@ it_ca as(
     where it.n_pc = 1
     order by po_ca.fe_fecha, po_ca.id_po, po_ca.id_it, it.id_servicio, it.id_sentido, it.hh_control
 ),
+/*
+Get VE data and join it with PO_CA data to have vehicles data based on the PO or POE values.
+*/
 ve_ca as(
 	select
     	row_number() over(order by po_ca.fe_fecha, po_ca.id_po, po_ca.id_ve, ve.id_servicio, ve.id_vehiculo) as id_ve_ca,
@@ -108,6 +138,14 @@ ve_ca as(
         and po_ca.id_ve = ve.id_ve
     order by po_ca.fe_fecha, po_ca.id_po, po_ca.id_ve, ve.id_servicio
 ),
+/*
+Get all indicators for the Expedition based on the Itinerary and Vehicle. It only takes into count the intersection between both,
+it means that they fulfilled some conditions.
+	1. Fullfilled with the control point.
+    2. It is a programmed operation.
+    3. It has an complete itinerary (start and end time).
+    4. Expedition time is between the start and the end time of the itinerary.
+*/
 asignacion1a as(
     select distinct on(it_ca.id_it_ca)
     	it_ca.id_contrato,
@@ -158,6 +196,12 @@ asignacion1a as(
     	abs(86400*date_part('day', e.hh_inicio - it_ca.hh_control) + 3600*date_part('hour', e.hh_inicio - it_ca.hh_control) +
     	60*date_part('minute', e.hh_inicio - it_ca.hh_control) + date_part('second', e.hh_inicio - it_ca.hh_control))
 ),
+/*
+Get all indicators for the Expedition based on the Itinerary and Vehicle.
+
+Similar to the above query with the difference that here it takes in count only the ones that were not included in the
+conditions for Asignacion1a. The only condition is the fulfillment of the control point to be greater than 0.65.
+*/
 asignacion1b as(
     select
     	e.id_contrato,
@@ -194,6 +238,9 @@ asignacion1b as(
     where e.kpi_cumplimiento_pc >= 0.65
         and a1a.id_expedicion is null
 ),
+/*
+Uses Asignacion1a and Asignacion1b to creates a new table with both results.
+*/
 indicadores as(
         select
     		it_ca.id_contrato,
@@ -236,6 +283,9 @@ indicadores as(
         from asignacion1b
     order by fe_fecha, id_servicio, id_sentido, hh_control, hh_inicio
 )
+/*
+Insert all processed data into Indicators Dataset with their respective information.
+*/
 INSERT INTO {indicators_dataset} (
     dataset_name,
     dataset_table_name,
