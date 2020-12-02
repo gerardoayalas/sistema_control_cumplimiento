@@ -253,29 +253,40 @@ evento_recorrido as(
 ),
 --EVALUAR: para elegir sólo una pasada por PC, basta con un 'group by' y un min id_gps
 --4.2.- Crea id_expedición para subconjuntos de puntos de control.
-expedicion_id as(
+expedicion_id as
+(
     select
-        --id_contrato,
-        fe_fecha,
-        id_pc,
-        id_vehiculo,
-        id_servicio,
-        id_sentido,
-        n_pc, 
-        id_gps,
-        inicio_recorrido,--
+        ER.fe_fecha,
+        ER.id_pc,
+        ER.id_vehiculo,
+        ER.id_servicio,
+        ER.id_sentido,
+        ER.n_pc, 
+        ER.id_gps,
+        ER.inicio_recorrido,--
         -- Ojo: id_expedicion es único por batch de información
-        sum(inicio_recorrido) over (order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps rows between unbounded preceding and current row) as id_expedicion,
-        basura
-    from evento_recorrido
-    order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps
+         sum( ER.inicio_recorrido )
+        over( order by ER.id_pc, ER.id_vehiculo, ER.id_servicio, ER.id_sentido, ER.id_gps rows between unbounded preceding and current row
+	    ) as id_expedicion,
+        basura,
+	nMaxPCCA.nMaximoPC
+    from evento_recorrido ER
+--Obtener máximo punto de control definido por diseño.
+	      Left join (select id_pc, id_servicio, id_sentido, max(n_pc) as nMaximoPC
+                           from pc_ca
+                          group by id_pc, id_servicio, id_sentido
+                          order by id_pc, id_servicio, id_sentido) as nMaxPCCA
+	             on nMaxPCCA.id_pc       = ER.id_pc
+                    and nMaxPCCA.id_servicio = ER.id_servicio   
+                    and nMaxPCCA.id_sentido  = ER.id_sentido
+    order by ER.id_pc, ER.id_vehiculo, ER.id_servicio, ER.id_sentido, ER.id_gps
 ),
+
 --4.3.- Contabiliza pasadas por PC, conservando la primera para cada 'n_pc' y obtiene 'max_pc' para futura Regla de Negocio.
-expedicion_pc as(
+(
 	-- Regla de Negocio: el distinct elimina eventos de punto de control duplicados. Dada la lógica que utiliza,
 	--                   conserva el primer registro.
     select distinct on (eid.id_pc, eid.id_vehiculo, eid.id_servicio, eid.id_sentido, eid.id_expedicion, eid.n_pc)    
-        --eid.id_contrato,
         eid.fe_fecha,
         eid.id_pc,
         eid.id_vehiculo,
@@ -283,75 +294,84 @@ expedicion_pc as(
         eid.id_sentido,
         eid.id_expedicion,
         eid.n_pc,
-        pc_data.max_pc,
+        eid.nMaximoPC,
         eid.id_gps,
         gps.fechahora_local,
         eid.basura
     from expedicion_id as eid
     left join gps
     	on eid.id_vehiculo = gps.id_vehiculo
-    	and eid.id_gps = gps.id_gps
-    left join (
-        select id_pc, id_servicio, id_sentido, max (n_pc) as max_pc
-        from pc_ca
-        group by id_pc, id_servicio, id_sentido
-        order by id_pc, id_servicio, id_sentido
-    ) as pc_data
-    	on eid.id_pc = pc_data.id_pc
-    	and eid.id_servicio = pc_data.id_servicio
-    	and eid.id_sentido = pc_data.id_sentido
-  	-- necesario para que el distinct conserve el primer duplicado.
-    order by eid.id_pc, eid.id_vehiculo, eid.id_servicio, eid.id_sentido, eid.id_expedicion, eid.n_pc, eid.id_gps
+       and eid.id_gps      = gps.id_gps
+            left join
+	              ( select distinct on (eid.id_expedicion) eid.id_expedicion, eid.id_gps, pcca.nmax 
+                          from expedicion_id eid                       
+                          left join (  select id_pc, id_servicio, id_sentido, max(n_pc) as nmax
+                                       from pc_ca
+                                      group by id_pc, id_servicio, id_sentido
+                                      order by id_pc, id_servicio, id_sentido ) AS pcca
+                                 on pcca.id_pc       = eid.id_pc
+                                and pcca.id_servicio = eid.id_servicio   
+                                and pcca.id_sentido  = eid.id_sentido
+                              where eid.n_pc         = pcca.nmax
+                      ) AS expcca 
+                   on eid.id_expedicion = expcca.id_expedicion
+       where (eid.id_gps <= expcca.id_gps) OR (expcca.id_gps is null)           
+   order by eid.id_pc, eid.id_vehiculo, eid.id_servicio, eid.id_sentido, eid.id_expedicion, eid.n_pc, eid.id_gps
 ),
+
 --4.4.- Detecta si la expedición fue válida, en base a Reglas de Negocio anteriores.
-expedicion0 as(
+expedicion0 as
+(
     select
-        epc.id_expedicion,
-        --id_contrato,
-        --min(fe_fecha) as fe_fecha,
-        epc.id_pc,
-        epc.id_vehiculo,
-        epc.id_servicio,
-        epc.id_sentido,
-        min(fechahora_local) as hh_inicio,
-        max(fechahora_local) as hh_fin,
-        --Regla de Negocio: calculada como %, por lo que se puede considerar de diferentes formas
-        count(id_vehiculo)::decimal/max(max_pc) as kpi_pc,
-        case
-            when sum(basura) > 0 then 1 when count(id_vehiculo)::decimal/max(max_pc) < 0.65 then 1
+            epc.id_expedicion,
+            epc.id_pc,
+            epc.id_vehiculo,
+            epc.id_servicio,
+            epc.id_sentido,
+            min(fechahora_local) as hh_inicio,
+            max(fechahora_local) as hh_fin,
+            --Regla de Negocio: calculada como %, por lo que se puede considerar de diferentes formas
+            count(id_vehiculo)::decimal/max(nMaximoPC) as kpi_pc
+/*
+	case
+            when sum(basura) > 0 then 1 when count(id_vehiculo)::decimal/max(nMaximoPC) < 0.65 then 1
             --Regla de Negocio: elimino expediciones que superen 1.5x el máximo tiempo definido para esa expedición.
     		--					Ver join para entender cómo se calcula el máximo.
-            when date_part('hour', max(fechahora_local) - min(fechahora_local)) * 3600 +
-    			 date_part('minute', max(fechahora_local) - min(fechahora_local)) * 60 +
-    			 date_part('second', max(fechahora_local) - min(fechahora_local)) >
-    			 1.5*max(t_max.t_max)*60 then 1
+            when date_part('hour', max(fechahora_local)   - min(fechahora_local)) * 3600 +
+    		 date_part('minute', max(fechahora_local) - min(fechahora_local)) * 60 +
+    		 date_part('second', max(fechahora_local) - min(fechahora_local)) >
+    		 1.5 * max(t_max.t_max) * 60 then 1
             else 0
         end as basura,
         1 as check_traslape_salida -- cómo validar que un vehículo no esté operando al mismo tiempo en 2 servicios?
+*/	
     from expedicion_pc as epc
     -- Regla de negocio: obtengo el máximo tiempo de viaje permitido (t_max) para un servicio-sentido,
     --					 en base a todos los itinerarios de ese is_pc
     left join (
-        select
-            id_it.id_servicio,
-            id_it.id_sentido,
-            it_pc.id_pc,
-            max(id_it.t_max) as t_max
-        from dataset_214531 as id_it
-        inner join (select distinct id_it, id_pc from po_ca) as it_pc
-        	on it_pc.id_it = it_pc.id_it where id_contrato = (select * from contrato)
-        group by id_it.id_servicio, id_sentido, it_pc.id_pc
-        order by id_it.id_servicio, id_it.id_sentido, it_pc.id_pc
-    ) as t_max
-    	on t_max.id_servicio = epc.id_servicio
-    	and t_max.id_sentido = epc.id_sentido
-    	and t_max.id_pc = epc.id_pc
+                select
+                       id_it.id_servicio,
+                       id_it.id_sentido,
+                       it_pc.id_pc,
+                       max(id_it.t_max) as t_max
+                  from dataset_214531 as id_it
+                   inner join (select distinct id_it, id_pc from po_ca) as it_pc
+        	           on it_pc.id_it = it_pc.id_it 
+	                where id_contrato = (select * from contrato)
+                        group by id_it.id_servicio, id_sentido, it_pc.id_pc
+                        order by id_it.id_servicio, id_it.id_sentido, it_pc.id_pc
+                              ) as t_max
+    	   on t_max.id_servicio = epc.id_servicio
+    	  and t_max.id_sentido = epc.id_sentido
+    	  and t_max.id_pc = epc.id_pc
     --group by es por id_po. Revisar qué pasa cuando un viaje cambia de día y de PO (caso de borde).
     group by epc.id_pc, id_vehiculo, epc.id_servicio, epc.id_sentido, id_expedicion
     order by epc.id_pc, id_vehiculo, epc.id_servicio, epc.id_sentido, id_expedicion
 ),
-expedicion1 as (
-    select
+			   
+expedicion1 as
+(
+ select
         e0.id_expedicion,
         e0.id_pc,
         e0.id_vehiculo,
@@ -376,42 +396,37 @@ expedicion1 as (
     		end
             else 0
         end as traslape --¿cambiar a 'basura'?
-    from expedicion0 as e0
+ from expedicion0 as e0
     -- Regla de Negocio: El inner join elimina cualquier duplicado, dejando sólo una. En el caso de que hayan dos con 100% pc sólo quedará la más larga.
     inner join (
         -- ordeno por ed_vehiculo y hh_ini y kpi_pc, para posteriormente dejar la expedición con mayor cumplimiento
         -- con el disinct on. En caso de empate queda la con mayor tiempo de viaje.
-        select distinct on (id_vehiculo, hh_inicio)
-            id_expedicion,
-            id_vehiculo,
-            hh_inicio,
-            1 as ini_prioritario
-        from expedicion0
-        where basura = 0
-        order by id_vehiculo, hh_inicio, kpi_pc desc, hh_fin desc
-    ) as ini
-    	on ini.id_expedicion = e0.id_expedicion
+                  select distinct on (id_vehiculo, hh_inicio)
+                                      id_expedicion,
+                                      id_vehiculo,
+                                      hh_inicio,
+                                      1 as ini_prioritario
+                    from expedicion0
+                   where basura = 0
+                   order by id_vehiculo, hh_inicio, kpi_pc desc, hh_fin desc
+               ) as ini
+    	    on ini.id_expedicion = e0.id_expedicion
     -- Regla de Negocio: El inner join elimina cualquier duplicado, dejando sólo una. En el caso de que hayan dos con 100% pc sólo quedará la más larga.
-    inner join (
+          inner join (
         -- ordeno por ed_vehiculo y hh_fin y kpi_pc, para posteriormente dejar la expedición con mayor cumplimiento
         -- con el disinct on. En caso de empate queda la con mayor tiempo de viaje.
-        select distinct on (id_vehiculo, hh_fin)
-            id_expedicion,
-            id_vehiculo,
-            hh_fin,
-            1 as fin_prioritario
-        from expedicion0
-        where basura = 0
-        order by id_vehiculo, hh_fin, kpi_pc desc, hh_inicio
-    ) as fin on fin.id_expedicion = e0.id_expedicion
+                        select distinct on (id_vehiculo, hh_fin)
+                                            id_expedicion,
+                                            id_vehiculo,
+                                            hh_fin,
+                                            1 as fin_prioritario
+                          from expedicion0
+                         where basura = 0
+                         order by id_vehiculo, hh_fin, kpi_pc desc, hh_inicio
+                     ) as fin on fin.id_expedicion = e0.id_expedicion
     where e0.basura = 0
     order by e0.id_vehiculo, e0.hh_inicio, e0.kpi_pc desc, e0.hh_fin desc
 ), --ÚLTIMA QUERY DE PRIMER PROCESO. PARA OBTENER EL OUTPUT, DEBE FILTRARSE POR TRASLAPE=0
-
-
-
-
-
 
 --5.- CUMPLIMIENTO ITINERARIO Y PPU
 --5.1. 
@@ -500,8 +515,13 @@ asignacion1a as(
     	end as kpi_ith,
     	case when ve_ca.id_vehiculo is not null then 1::float else 0::float end as kpi_ve
     from it_ca
-    -- considera sólo cruce de información
-    inner join (select * from expedicion1 where traslape = 0) as e
+    	-- considera sólo cruce de información
+--MANT-AERH-02122020-INI.											   
+	--inner join (select * from expedicion1 where traslape = 0) as e
+--DESC, se cambia columna traslape por columna basura a nivel del where.
+--      la columna basura se carga en la consulta expedicion0.
+--MANT-AERH-02122020-TER.											   
+	inner join (select * from expedicion1 where basura = 0) as e										   
         on  e.hh_inicio::date = it_ca.fe_fecha
         and e.id_pc = it_ca.id_pc
         and e.id_servicio = it_ca.id_servicio
@@ -557,8 +577,13 @@ asignacion1b as(
     	and ve_ca.id_vehiculo = e.id_vehiculo
     -- Aunque la RN definida en los puntos de control es sólo considerar 100% de cumplimiento,
     -- se traen sobre 65%, con el fin de generar atributos de incumplimiento (no cumple trazado).
-    where traslape = 0
-    	and e.kpi_pc >= 0.65
+--MANT-AERH-02122020-INI.
+--DESC, se cambia columna traslape por columna basura a nivel del where.
+--      la columna basura se carga en la consulta expedicion0.
+    --where traslape = 0
+	where basura = 0
+--MANT-AERH-02122020-TER.											   									   
+	and e.kpi_pc >= 0.65
         and a1a.id_expedicion is null
 ),
 indicadores as(
