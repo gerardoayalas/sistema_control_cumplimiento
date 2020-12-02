@@ -515,8 +515,13 @@ asignacion1a as(
     	end as kpi_ith,
     	case when ve_ca.id_vehiculo is not null then 1::float else 0::float end as kpi_ve
     from it_ca
-    -- considera sólo cruce de información
-    inner join (select * from expedicion1 where traslape = 0) as e
+    	-- considera sólo cruce de información
+--MANT-AERH-02122020-INI.											   
+	--inner join (select * from expedicion1 where traslape = 0) as e
+--DESC, se cambia columna traslape por columna basura a nivel del where.
+--      la columna basura se carga en la consulta expedicion0.
+--MANT-AERH-02122020-TER.											   
+	inner join (select * from expedicion1 where basura = 0) as e										   
         on  e.hh_inicio::date = it_ca.fe_fecha
         and e.id_pc = it_ca.id_pc
         and e.id_servicio = it_ca.id_servicio
@@ -572,8 +577,13 @@ asignacion1b as(
     	and ve_ca.id_vehiculo = e.id_vehiculo
     -- Aunque la RN definida en los puntos de control es sólo considerar 100% de cumplimiento,
     -- se traen sobre 65%, con el fin de generar atributos de incumplimiento (no cumple trazado).
-    where traslape = 0
-    	and e.kpi_pc >= 0.65
+--MANT-AERH-02122020-INI.
+--DESC, se cambia columna traslape por columna basura a nivel del where.
+--      la columna basura se carga en la consulta expedicion0.
+    --where traslape = 0
+	where basura = 0
+--MANT-AERH-02122020-TER.											   									   
+	and e.kpi_pc >= 0.65
         and a1a.id_expedicion is null
 ),
 indicadores as(
