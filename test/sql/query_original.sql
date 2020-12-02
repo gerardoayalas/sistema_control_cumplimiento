@@ -331,8 +331,9 @@ expedicion0 as
             min(fechahora_local) as hh_inicio,
             max(fechahora_local) as hh_fin,
             --Regla de Negocio: calculada como %, por lo que se puede considerar de diferentes formas
-            count(id_vehiculo)::decimal/max(nMaximoPC) as kpi_pc,
-        case
+            count(id_vehiculo)::decimal/max(nMaximoPC) as kpi_pc
+/*
+	case
             when sum(basura) > 0 then 1 when count(id_vehiculo)::decimal/max(nMaximoPC) < 0.65 then 1
             --Regla de Negocio: elimino expediciones que superen 1.5x el máximo tiempo definido para esa expedición.
     		--					Ver join para entender cómo se calcula el máximo.
@@ -343,6 +344,7 @@ expedicion0 as
             else 0
         end as basura,
         1 as check_traslape_salida -- cómo validar que un vehículo no esté operando al mismo tiempo en 2 servicios?
+*/	
     from expedicion_pc as epc
     -- Regla de negocio: obtengo el máximo tiempo de viaje permitido (t_max) para un servicio-sentido,
     --					 en base a todos los itinerarios de ese is_pc
