@@ -1,0 +1,664 @@
+pip install amigocloud dateparser notebook
+
+
+
+
+import os
+# You can create a token from https://app.amigocloud.com/accounts/tokens/
+# Tokens should be Project Tokens
+os.environ['ACCESS_TOKEN'] = 'A:ia1PzVP13QMSPliAzyITmRLRIhxAtGsLAKu5TW'
+os.environ['DEV_ACCESS_TOKEN'] = 'A:J27RzgQXhTho9MQQwLpXN8lJ6goE7VTHYQyyjV'
+
+
+
+
+import os
+import re
+from amigocloud import AmigoCloud
+from dateparser import parse as parse_date
+
+# If DEVELOPMENT is True the IDs will change to be the development project
+# Don't Forget that tokens are only per project, so a new one for DTPR Dev is needed.
+DEVELOPMENT = True
+
+if not DEVELOPMENT:
+    # Identifier to get the access token for DTPR or DTPR Dev
+    TOKEN_SLUG = 'ACCESS_TOKEN'
+    # DTPR Project
+    # Project ID
+    PROJECT_ID = 23941
+    # Dataset IDs
+    DATASET_HISTORY_ID = 207394
+    PO_DATASET_ID = 214445
+    POE_DATASET_ID = 211335
+    PC_DATASET_ID = 211336
+    IT_DATASET_ID = 211337
+    VE_DATASET_ID = 211338
+    EXPEDITION_DATASET_ID = 207256
+    INDICATORS_DATASET_ID = 214111
+    # Queries IDs
+    EXPEDITION_QUERY_ID = 3287
+    INDICATORS_QUERY_ID = 3288
+else:
+    # Identifier to get the access token for DTPR or DTPR Dev
+    TOKEN_SLUG = 'DEV_ACCESS_TOKEN'
+    # DTPR DEV Project
+    # Project ID
+    PROJECT_ID = 26554
+    # Dataset IDs
+    DATASET_HISTORY_ID = 219885
+    PO_DATASET_ID = 219944
+    POE_DATASET_ID = 219945
+    PC_DATASET_ID = 219946
+    IT_DATASET_ID = 219947
+    VE_DATASET_ID = 219948
+    EXPEDITION_DATASET_ID = 219887
+    INDICATORS_DATASET_ID = 219886
+    # Queries IDs (Expedition Query ID should always be lower than Indicators Query for dependency order.)
+    EXPEDITION_QUERY_ID = 3354
+    INDICATORS_QUERY_ID = 3355
+
+
+# This variable has the purpose to run extra queries after Indicators query. Not used yet.
+INDICATORS_POST_QUERIES = {}
+
+# AmigoCloud
+# Initializing AmigoCloud with Gerardo's token. It has access only to the DTPR project. 
+amigocloud = AmigoCloud(
+    token=os.environ[TOKEN_SLUG],
+    project_url='https://app.amigocloud.com/api/v1/projects/{}'.format(PROJECT_ID))
+
+# Constants
+NOT_INCLUDED_ERROR = 'Contract {} is not included in the following datasets: {}.'
+SUCCESS = 'Success'
+FAILURE = 'Failure'
+# Datasets where the contract ID must be, in order to get enough data to run the
+# expedition query.
+CONTRACT_DATASETS = {
+    PO_DATASET_ID: 'PO',
+    PC_DATASET_ID: 'PC'
+}
+
+# Amigocloud Endpoints
+HOST = 'https://app.amigocloud.com'
+# Endpoint to run a SQL query
+SQL_URL = '{}/api/v1/projects/{}/sql'.format(HOST, PROJECT_ID)
+# Endpoint to run a Expedition query
+EXPEDITION_QUERY_URL = '{}/api/v1/projects/{}/queries/{}'.format(HOST, PROJECT_ID, EXPEDITION_QUERY_ID)
+# Endpoint to run a Indicators query
+INDICATORS_QUERY_URL = '{}/api/v1/projects/{}/queries/{}'.format(HOST, PROJECT_ID, INDICATORS_QUERY_ID)
+# Endpoint to run a Extra queries (Not used yet)
+EXTRA_QUERIES_URL = '{}/api/v1/projects/{}/queries'.format(HOST, PROJECT_ID)
+# Get all datasets inside DTPR Project
+DATASETS_URL = '{}/api/v1/projects/{}/datasets?type=tabular&type=raster&type=vector'.format(HOST, PROJECT_ID)
+
+# SQL Needed Queries
+# Insert data into Dataset Queries History
+DATASET_HISTORY_INSERT_QUERY = (
+    "INSERT INTO dataset_{table_id} ("
+    "dataset_name, dataset_db_table, query_type, query_id, status, query_output_info, dataset_last_updated) "
+    "VALUES ('{dataset_name}', '{table_name}', '{query_type}', '{query_id}', '{status}', "
+    "'{query_output_info}', '{last_updated}')")
+# Update Dataset Queries History data
+DATASET_HISTORY_UPDATE_QUERY = (
+    "UPDATE dataset_{table_id} SET "
+    "dataset_last_updated = '{last_updated}', "
+    "status = '{status}', "
+    "dataset_db_table = '{table_name}', "
+    "query_output_info = '{query_output_info}' "
+    "WHERE dataset_name = '{dataset_name}' and query_id = '{query_id}'")
+# Get Data from Dataset Queries History
+DATASET_HISTORY_QUERY = (
+    "SELECT * FROM dataset_{} WHERE (query_id = '{}' or status = '{}') "
+    "and dataset_name  in ({}) ORDER BY query_id asc")
+# Delete records from a dataset given a dataset name attribute.
+# Used to remove Summary (Expedition) and Indicators tables.
+DELETE_TABLE_RECORDS = "DELETE FROM dataset_{} WHERE dataset_name = '{}'"
+# Check if contract id is included in CONTRACT_DATASETS.
+CONTRACT_EXISTS_QUERY = (
+    "select COUNT(*) from {contract_dataset} WHERE id_contrato = '{contract_id}'")
+# Needed data gotten from every GPS dataset whose name starts with MTT in the project.
+# Get servicio (contract id) from the GPS datasets.
+CONTRACT_ID_QUERY = "select servicio from {gps_dataset} LIMIT 1"
+# Get all ppu (bus id) from the GPS datasets.
+BUS_ID_QUERY = 'select distinct ppu from {gps_dataset}'
+# Get the start date from the GPS datasets.
+START_DATE_QUERY = "select min(date_trunc('month', gps_fecha_hora_chile)::date) as fe_ini from {gps_dataset}"
+# Get the end date from the GPS datasets.
+END_DATE_QUERY = (
+    "select min(date_trunc('month', gps_fecha_hora_chile) + interval '1 month - 1 day')::date"
+    " as fe_fin from {gps_dataset}")
+# Get Max radius from PC Dataset for the given contract id.
+MAX_RADIUS_QUERY = "select max(radio) from {pc_dataset} WHERE id_contrato = '{contract_id}'"
+
+
+def run_get_query(query, first_only=False, extra={}):
+    """
+    Return the result of a simple query.
+    :params query: String query to process.
+    :params first_only: If query should return only the first value instead
+        of an array.
+    :returns: Query response data.
+    """
+    response = amigocloud.get(SQL_URL, {'query': query, **extra})
+    if 'data' in response:
+        data = response['data']
+        return data[0] if first_only and len(data) > 0 else response['data']
+    return None
+
+
+class DTPRDataset:
+    """
+    Represent a dataset that would be processed. This dataset is a GPS dataset whose
+    name starts with MTT. The only datasets that instantiate this class are the new
+    datasets, datasets that have a Failed status in Dataset Queries History or where
+    updated. The only way to identify a dataset is the name, so if a dataset is
+    updated it will search for an entry with the same name in Dataset Queries History,
+    Summary(Expedition), or Indicators datasets to delete the current data and add the new one.
+
+    All processes start with Success status and if something fails across the process,
+    the status will change to Failure. With this status, we ensure that every time the
+    script is run failed datasets will be run again.
+    """
+
+    def __init__(self, dataset, is_new_dataset=False, queries={}):
+        """Initialize all needed values"""
+        self.dataset = dataset
+        self.added_rows = 0
+        self.is_new_dataset = is_new_dataset
+        self.query_output_info = ''
+        self.empty_contracts = []
+        self.status = SUCCESS
+        self.evaluated_contract = None
+        self.contract_id = None
+        self.expedition_query = queries['expedition']['query']
+        self.expedition_query_name = queries['expedition']['name']
+        self.indicators_query = queries['indicators']['query']
+        self.indicators_query_name = queries['indicators']['name']
+        self.post_indicators_queries = queries['post_indicators_queries']
+        self.create_dataset_index()
+
+    def create_dataset_index(self):
+        """Create a dataset index ppu(id_bus) in new datasets."""
+        if self.is_new_dataset:
+            print('\nCreating index for new dataset...')
+            query = "{}?query=select * from create_dataset_ppu_index('{}')&function=True".format(
+                SQL_URL, self.dataset['table_name'])
+            try:
+                amigocloud.get(query)
+            except Exception as e:
+                self.status = FAILURE
+                print('Failed to create index for dataset {}'.format(self.dataset['table_name']))
+
+    def process_bus_expedition(self, bus_id):
+        """Run Expedition query for just one bus id"""
+        try:
+        # Run the query for the current dataset
+            contract_query = self.expedition_query.format(
+                dataset_name=self.dataset['name'],
+                gps_dataset=self.dataset['table_name'],
+                po_dataset='dataset_{}'.format(PO_DATASET_ID),
+                poe_dataset='dataset_{}'.format(POE_DATASET_ID),
+                pc_dataset='dataset_{}'.format(PC_DATASET_ID),
+                it_dataset='dataset_{}'.format(IT_DATASET_ID),
+                summary_dataset='dataset_{}'.format(EXPEDITION_DATASET_ID),
+                contract_id=self.contract_id,
+                bus_id=bus_id,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                max_radius=self.max_radius
+            )
+            # Regex to remove line breaks and pass a clean string as a query,
+            clean_query = re.sub(' +', ' ', contract_query.replace('\n', ' '))
+            response = amigocloud.post(SQL_URL, {
+                'query': clean_query, 'dataset_id': EXPEDITION_DATASET_ID})
+        except Exception as e:
+            print('Error running Bus expedition query: ', e)
+            self.status = FAILURE
+            self.query_output_info = (
+                'Error at processing query with bus id = {}.'.format(bus_id))
+        else:
+            # If the count of new rows is 0. It means that the query
+            # doesn't support the contract, even if it is registered in the
+            # Operational Plan
+            if 'count' in response:
+                self.added_rows += response['count']
+                return
+            print('Error response:', response)
+
+    def run_expedition_query(self):
+        """
+        Get buses ids and loop over them to run the Expedition Query for just one
+        id bus.
+        """
+        bus_id_list = run_get_query(
+            BUS_ID_QUERY.format(gps_dataset=self.dataset['table_name']))
+
+        # Edge Case: Add raise exception if there are no buses. To be saved in the
+        # history as an error
+        bus_id_list = map(lambda x: x['ppu'], bus_id_list or [])
+
+        for bus_id in bus_id_list:
+            self.process_bus_expedition(bus_id)
+            if self.status == FAILURE:
+                # If status if Failure, all the process is stopped
+                break
+
+    def run_indicators_query(self):
+        """
+        Run Indicators query
+        """
+        self.query_output_info = 'Indicators were added successfully '
+        try:
+            # Run the query for the current dataset
+            result_query = self.indicators_query.format(
+                dataset_name=self.dataset['name'],
+                gps_dataset=self.dataset['table_name'],
+                po_dataset='dataset_{}'.format(PO_DATASET_ID),
+                poe_dataset='dataset_{}'.format(POE_DATASET_ID),
+                it_dataset='dataset_{}'.format(IT_DATASET_ID),
+                ve_dataset='dataset_{}'.format(VE_DATASET_ID),
+                summary_dataset='dataset_{}'.format(EXPEDITION_DATASET_ID),
+                indicators_dataset='dataset_{}'.format(INDICATORS_DATASET_ID),
+                contract_id=self.contract_id,
+                start_date=self.start_date,
+                end_date=self.end_date
+            )
+            # Regex to remove line breaks and pass a clean string as a query,
+            clean_query = re.sub(' +', ' ', result_query.replace('\n', ' '))
+            response = amigocloud.post(SQL_URL, {
+                'query': clean_query, 'dataset_id': INDICATORS_DATASET_ID})
+        except Exception as e:
+            print('Error running Indicators query: ', e)
+            self.status = FAILURE
+            self.query_output_info = (
+                'Error at processing indicators query with contract id = {}.'.format(self.contract_id))
+
+    def run_post_indicators_query(self, post_query_id, query_data):
+        """
+        (Not Used Yet) Run queries after Indicators result. The purpose is to create
+        another table for the indicators output based on a particular date value.
+        For example: By Month.
+        """
+        query_name = query_data.get('name')
+        query = query_data.get('query')
+        query_dataset = query_data.get('dataset')
+
+        print('Running post query {}'.format(query_name))
+        self.query_output_info = 'Post Query {} completed.'.format(query_name)
+        try:
+            # Run the query for the current dataset
+            result_query = query.format(
+                dataset_name=self.dataset['name'],
+                gps_dataset=self.dataset['table_name'],
+                indicators_dataset='dataset_{}'.format(INDICATORS_DATASET_ID),
+                save_dataset=query_dataset,
+                contract_id=self.contract_id,
+                start_date=self.start_date,
+                end_date=self.end_date
+            )
+            # Regex to remove line breaks and pass a clean string as a query,
+            clean_query = re.sub(' +', ' ', result_query.replace('\n', ' '))
+            response = amigocloud.post(SQL_URL, {
+                'query': clean_query, 'dataset_id': query_dataset.split('_')[1]})
+        except Exception as e:
+            print('Error running {} query: '.format(query_name), e)
+            self.status = FAILURE
+            self.query_output_info = (
+                'Error at processing post indicators query {} with ID.'.format(
+                    result_query, post_query_id))
+
+    def check_contract_validity(self):
+        """Check if contract exists in all CONTRACT_DATASETS."""
+        for contract_dataset_id, dataset_name in CONTRACT_DATASETS.items():
+            exists_query = CONTRACT_EXISTS_QUERY.format(
+                contract_dataset='dataset_{}'.format(contract_dataset_id),
+                contract_id=self.contract_id)
+            try:
+                exists_result = run_get_query(exists_query, first_only=True)
+                if exists_result['count'] == 0:
+                    self.empty_contracts.append(dataset_name)
+                    self.status = FAILURE
+            except Exception as e:
+                self.status = FAILURE
+                print('Error running contract query: ', e)
+
+    def clean_table_records(self, rerun_query_id):
+        """
+        Remove Summary (Expedition) and/or Indicators queries outputs to insert
+        updated values. Only if there is not rerun_query_id. The purpose of the
+        rerun_query_id is to re run a query if a dependant query was run again.
+
+        :params rerun_query_id: Integer with a query id to be run again.
+        """
+
+        if not rerun_query_id:
+            amigocloud.post(SQL_URL, {
+                'query': DELETE_TABLE_RECORDS.format(
+                    EXPEDITION_DATASET_ID, self.dataset['name']),
+                'dataset_id': EXPEDITION_DATASET_ID
+            })
+        if not rerun_query_id or rerun_query_id == INDICATORS_QUERY_ID:
+            amigocloud.post(SQL_URL, {
+                'query': DELETE_TABLE_RECORDS.format(
+                    INDICATORS_DATASET_ID, self.dataset['name']),
+                'dataset_id': INDICATORS_DATASET_ID
+            })
+
+    def get_limit_values(self):
+        """Get all limit values"""
+        # Request max radius
+        self.max_radius = run_get_query(MAX_RADIUS_QUERY.format(
+            pc_dataset='dataset_{}'.format(
+                PC_DATASET_ID), contract_id=self.contract_id),
+            first_only=True)
+        self.max_radius = self.max_radius and self.max_radius['max']
+
+        # Request start date
+        self.start_date = run_get_query(START_DATE_QUERY.format(
+            gps_dataset=self.dataset['table_name']), first_only=True)
+        self.start_date = self.start_date and self.start_date['fe_ini']
+
+        # Request end date
+        self.end_date = run_get_query(END_DATE_QUERY.format(
+            gps_dataset=self.dataset['table_name']), first_only=True)
+        self.end_date = self.end_date and self.end_date['fe_fin']
+
+    def save_record_history(self, query_id, query_name, run_new_queries=False):
+        """Save query status and output ifno into Queries History table"""
+
+        if self.is_new_dataset or run_new_queries:
+            update_query = DATASET_HISTORY_INSERT_QUERY.format(
+                table_id=DATASET_HISTORY_ID,
+                dataset_name=self.dataset['name'],
+                table_name=self.dataset['table_name'],
+                last_updated=self.dataset['last_updated'],
+                query_type=query_name,
+                query_id=query_id,
+                status=self.status,
+                query_output_info=self.query_output_info
+            )
+        else:
+            update_query = DATASET_HISTORY_UPDATE_QUERY.format(
+                table_id=DATASET_HISTORY_ID,
+                dataset_name=self.dataset['name'],
+                table_name=self.dataset['table_name'],
+                last_updated=self.dataset['last_updated'],
+                query_id=query_id,
+                status=self.status,
+                query_output_info=self.query_output_info
+            )
+
+        # INFO LOG: Running history query to register new contract query run attempt
+        print('Saving {} history...'.format(query_name))
+        try:
+            amigocloud.post(SQL_URL, {
+                'query': update_query, 'dataset_id': DATASET_HISTORY_ID})
+        except Exception as e:
+            print('Error running history: ', e)
+
+    def process_dataset(self, rerun_query_id=None, run_new_queries=False):
+        """Start the dataset process only if the previous checks passed"""
+        if self.status == FAILURE:
+            print('Failed at starting process, skipping datasets...')
+            return
+        # INFO LOG: Print dataset name
+        print('\nDataset:', self.dataset['name'])
+
+        # Check if contract ID is included in the Operational Plan
+        # Add Raise Exception if there are not contrac_id
+        self.contract_id = run_get_query(
+            CONTRACT_ID_QUERY.format(gps_dataset=dataset['table_name']),
+            first_only=True)
+        if not self.contract_id:
+            print('No contract id found in dataset {}'.format(self.dataset['name']))
+            return
+        self.contract_id = self.contract_id.get('servicio')
+        self.check_contract_validity()
+
+        # If contract ID is included in the Operational Plan then,
+        # it is able to run the query.
+        if self.status == SUCCESS:
+            # If it was already used and was updated or the process failed.
+            # Remove all old related records to insert only the new ones.
+            if not self.is_new_dataset:
+                try:
+                    self.clean_table_records(rerun_query_id)
+                except Exception as e:
+                    print('Error cleaning current records', e)
+                    return
+
+            self.get_limit_values()
+            if not self.max_radius or not self.start_date or not self.end_date:
+                self.status = FAILURE
+                self.query_output_info = 'Missing parameters.'
+                print('OUTPUT:', self.query_output_info)
+        else:
+            self.query_output_info = NOT_INCLUDED_ERROR.format(
+                self.contract_id, ', '.join(self.empty_contracts))
+            # INFO LOG: Print query info for not found contract.
+            print('Query Info:', self.query_output_info)
+
+        # As this is the very first query it should run always and never be rerun
+        # because it doesn't depend on some query. It only is run again if it
+        # failed before or was updated.
+        if not rerun_query_id:
+            if self.status != FAILURE:
+                self.run_expedition_query()
+                if self.status != FAILURE:
+                    print('Rows added:', self.added_rows)
+                    self.query_output_info = '{} row(s) were added'.format(self.added_rows)
+                    if self.added_rows == 0:
+                        self.status = FAILURE
+                        self.query_output_info = (
+                            'There were no results from query. No new entries were added.')
+                        print('OUTPUT:', self.query_output_info)
+
+            # Save the status of the query into the history.
+            self.save_record_history(EXPEDITION_QUERY_ID, self.expedition_query_name)
+
+        # This query depends on Summary (Expedition) query and can be rerun.
+        if not rerun_query_id or rerun_query_id == INDICATORS_QUERY_ID:
+            if self.status != FAILURE:
+                # INFO LOG: Print query name
+                print('Running Indicators Query:', self.indicators_query_name)
+                self.run_indicators_query()
+            else:
+                self.query_output_info = 'Expedition query failed'
+
+            # Save the status of the query into the history.
+            self.save_record_history(INDICATORS_QUERY_ID, self.indicators_query_name)
+
+        if self.status != FAILURE:
+            # (Not Used Yet) Should run all queries that depend on indicators query.
+            for post_query_id, post_query_data in self.post_indicators_queries.items():
+                if not rerun_query_id or rerun_query_id == post_query_id:
+                    self.run_post_indicators_query(post_query_id, post_query_data)
+                    self.save_record_history(post_query_id, post_query_data.get('name'), run_new_queries)
+
+
+class DTPR:
+    """
+    Represent the DTPR project. Here we request all the queries dn the datasets
+    that are inside the project.
+    """
+    def __init__(self, run_new_queries=[]):
+        """Initialize all needed values"""
+        self.post_indicators_queries = {}
+        self.get_dtpr_datasets()
+        self.process_expedition_query()
+        self.process_indicators_query()
+        self.process_post_indicators_queries()
+        self.failed_queries = {}
+        self.run_new_queries = run_new_queries
+
+    @property
+    def queries(self):
+        """Property that returns all the queries"""
+        return {
+            'expedition': {
+                'query': self.expedition_query,
+                'name': self.expedition_query_name
+            },
+            'indicators': {
+                'query': self.indicators_query,
+                'name': self.indicators_query_name
+            },
+            'post_indicators_queries': self.post_indicators_queries
+        }
+
+    def __iter__(self):
+        """
+        Iterable object that yields a DTPR Dataset. With some needed values to run
+        the queries: Is a new dataset and It should rerun a query,
+        """
+        while self.expedition_query or self.indicators_query:
+            # The datasets are being requested in chunks of 20. The next URL is used
+            # to request the next 20 datasets.
+            dataset_next_url = self.datasets.get('next')
+            all_datasets = self.datasets.get('results', [])
+
+            # Used only when a new query should be run, because exists already
+            # data. This will rerun all the new queries only. Otherwise, the normal
+            # process is followed.
+            if self.run_new_queries:
+                for dataset in self.filter_datasets({}, all_datasets):
+                    yield dataset, False, self.run_new_queries
+            else:
+                # Get all dataset names to be compared with the Queries History and
+                # to verify if they were run and their statuses.
+                dataset_names = list("'{}'".format(d['name']) for d in all_datasets)
+                # Get entries with the dataset names gotten above.
+                dataset_history = run_get_query(
+                    DATASET_HISTORY_QUERY.format(
+                        DATASET_HISTORY_ID, EXPEDITION_QUERY_ID, FAILURE,
+                        ",".join(dataset_names)))
+                if dataset_history is None:
+                    print('ERROR: Can not retrieve History Dataset Query: '.format(
+                        DATASET_HISTORY_QUERY.format(
+                            DATASET_HISTORY_ID, EXPEDITION_QUERY_ID, FAILURE,
+                            ",".join(dataset_names))))
+                    break
+
+                # Return all the datasets that are included in the Queries History.
+                registered_datasets = self.get_registered_datasets(dataset_history)
+                # Filter datasets to have the new datasets and the datasets with
+                # a failed process.
+                datasets = list(self.filter_datasets(registered_datasets, all_datasets))
+                # Get all datasets with some dependant queries to be rerun.
+                re_run_datasets = self.get_datasets_to_re_run(datasets, all_datasets)
+
+                for dataset in datasets:
+                    # Check if the dataset is new, if not the data in Summary (Expedition)
+                    # and Itinerary are for this dataset will be deleted and add
+                    # the new output only. There are no queries to be rerun.
+                    is_new_dataset = dataset['name'] not in registered_datasets
+                    yield dataset, is_new_dataset, None
+                for dataset in re_run_datasets:
+                    # As the queries that should rerun, are always existent, the
+                    # new dataset value is always false. The list of the queries
+                    # that need to be rerun for this dataset is included.
+                    yield dataset, False, self.failed_queries[dataset['name']]
+                    del self.failed_queries[dataset['name']]
+            # If there is no next url, it means that all the datasets were already returned.
+            if not dataset_next_url:
+                break
+            # Get the next group of datasets.
+            self.datasets = amigocloud.get(dataset_next_url)
+    
+    def get_datasets_to_re_run(self, datasets, all_datasets):
+        """
+        Go over all datasets and check if there are have some dependant failed
+        queries, to run again those queries.
+        """
+        dataset_list = []
+        dataset_names = list(map(lambda x: x['name'], datasets))
+        if self.failed_queries:
+            for dataset in all_datasets:
+                if (dataset['name'] in self.failed_queries
+                        and dataset['name'] not in dataset_names):
+                    dataset_list.append(dataset)
+
+        return dataset_list
+
+
+    def get_registered_datasets(self, dataset_history):
+        """
+        Get all datasets that are included in the Queries History. That means
+        that those datasets were already run. Only takes the ones that failed.
+        """
+        r_datasets = {}
+        for record in dataset_history:
+            if record['query_id'] == EXPEDITION_QUERY_ID:
+                r_datasets[record['dataset_name']] = {
+                      'last_updated': record['dataset_last_updated'],
+                      'status': record['status'],
+                      'query_id': record['query_id']
+                  }
+            elif (record['status'] == FAILURE
+                      and r_datasets[record['dataset_name']]['status'] == SUCCESS):
+                if (record['query_id'] == INDICATORS_QUERY_ID or
+                      record['dataset_name'] not in self.failed_queries):
+                    self.failed_queries[record['dataset_name']] = [record['query_id']]
+                else:
+                    self.failed_queries[record['dataset_name']].append(record['query_id'])
+                
+        return r_datasets
+
+    def filter_datasets(self, registered_datasets, all_datasets):
+        """
+        Filter datasets that start with MTT and if they failed or were updated.
+        """
+        return filter(
+            lambda x: (
+                x['name'].startswith('MTT')
+                and (
+                    x['name'] in registered_datasets
+                    and (
+                        parse_date(x['last_updated'])
+                        != parse_date(registered_datasets[x['name']]['last_updated'])
+                        or registered_datasets[x['name']]['status'] == FAILURE
+                    )
+                    or x['name'] not in registered_datasets
+                )
+            ),
+            all_datasets
+        )
+
+    def get_dtpr_datasets(self):
+        """Get all datasets inside project"""
+        self.datasets = amigocloud.get(DATASETS_URL)
+
+    def process_expedition_query(self):
+        """Ask AmigoCloud to return Expedition query"""
+        expedition_query = amigocloud.get(EXPEDITION_QUERY_URL)
+        self.expedition_query_name = expedition_query.get('name')
+        self.expedition_query = expedition_query.get('query')
+
+    def process_indicators_query(self):
+        """Ask AmigoCloud to return Indicators query"""
+        indicators_query = amigocloud.get(INDICATORS_QUERY_URL)
+        self.indicators_query_name = indicators_query.get('name')
+        self.indicators_query = indicators_query.get('query')
+
+    def process_post_indicators_queries(self):
+        """Ask AmigoCloud to return Indicators query"""
+        self.post_indicators_queries = {}
+        for query_id, query_dataset_id in INDICATORS_POST_QUERIES.items():
+            extra_query = amigocloud.get('{}/{}'.format(EXTRA_QUERIES_URL, query_id))
+            self.post_indicators_queries[query_id] = {
+                'name': extra_query.get('name'),
+                'query': extra_query.get('query'),
+                'dataset': 'dataset_{}'.format(query_dataset_id)
+            }
+
+# Intiante DTPR class object
+dtpr_datasets = DTPR()
+for dataset, is_new_dataset, rerun_queries in dtpr_datasets:
+    # Get all datasets to be processed. And run the queries that need to be run again.
+    dtpr_dataset = DTPRDataset(dataset, is_new_dataset, dtpr_datasets.queries)
+    if rerun_queries:
+      for rerun_query_id in rerun_queries:
+          dtpr_dataset.process_dataset(rerun_query_id, False)
+    else:
+        dtpr_dataset.process_dataset()
