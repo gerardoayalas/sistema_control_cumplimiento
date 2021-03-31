@@ -140,148 +140,442 @@ ve_ca as(
 ),
 /*
 Get all indicators for the Expedition based on the Itinerary and Vehicle. It only takes into count the intersection between both,
-it means that they fulfilled some conditions.
+it means that they fulfilled some conditions. 4 iterations because potential places get liberated because of duplicates.
 	1. Fullfilled with the control point.
     2. It is a programmed operation.
     3. It has an complete itinerary (start and end time).
     4. Expedition time is between the start and the end time of the itinerary.
 */
-asignacion1a as(
-    select distinct on(it_ca.id_it_ca)
-    	it_ca.id_contrato,
-        it_ca.id_it_ca,
-        it_ca.fe_fecha,
-        it_ca.id_it,
-        it_ca.id_servicio,
-        it_ca.id_sentido,
-        it_ca.n_pc,
-        it_ca.hh_control,
-        t_max,
-        it_ca.adelanto,
-        it_ca.atraso,
-        e.id_expedicion,
-        e.id_vehiculo,
-        e.hh_inicio,
-        e.hh_fin,
-    	e.kpi_cumplimiento_pc as kpi_pc,
-    	(86400*date_part('day', e.hh_fin - e.hh_inicio) + 3600*date_part('hour', e.hh_fin - e.hh_inicio) +
-    		60*date_part('minute', e.hh_fin - e.hh_inicio) + date_part('second', e.hh_fin - e.hh_inicio))/60/t_max as kpi_tv,
-    	1 as kpi_itd,
-    	case
-    		when e.hh_inicio < it_ca.hh_control then
-    			(86400*date_part('day', e.hh_inicio - it_ca.hh_control) + 3600*date_part('hour', e.hh_inicio - it_ca.hh_control) +
-    			60*date_part('minute', e.hh_inicio - it_ca.hh_control) + date_part('second', e.hh_inicio - it_ca.hh_control))/(60*it_ca.adelanto)
-    		else (86400*date_part('day', e.hh_inicio - it_ca.hh_control) + 3600*date_part('hour', e.hh_inicio - it_ca.hh_control) +
-    			60*date_part('minute', e.hh_inicio - it_ca.hh_control) + date_part('second', e.hh_inicio - it_ca.hh_control))/(60*it_ca.atraso)
-    	end as kpi_ith,
-    	case when ve_ca.id_vehiculo is not null then 1::float else 0::float end as kpi_ve
-    from it_ca
-    inner join expedicion as e
-        on  e.hh_inicio::date = it_ca.fe_fecha
-        and e.id_pc = it_ca.id_pc
-        and e.id_servicio = it_ca.id_servicio
-        and e.id_sentido = it_ca.id_sentido
-	left join ve_ca
-    	on  ve_ca.fe_fecha = e.hh_inicio::date
-    	and ve_ca.id_pc = e.id_pc
-    	and ve_ca.id_servicio = e.id_servicio
-    	and ve_ca.id_vehiculo = e.id_vehiculo
-    where it_ca.operacion_programada = 1
-    	and e.kpi_cumplimiento_pc = 1
-    	and it_ca.adelanto is not null
-    	and it_ca.atraso is not null
-    	and e.hh_inicio between it_ca.hh_control - ( 3 * it_ca.adelanto * interval '1 minute')
-    		and it_ca.hh_control + (3 * it_ca.atraso * interval '1 minute')
-    order by it_ca.id_it_ca,
-    	abs(86400*date_part('day', e.hh_inicio - it_ca.hh_control) + 3600*date_part('hour', e.hh_inicio - it_ca.hh_control) +
-    	60*date_part('minute', e.hh_inicio - it_ca.hh_control) + date_part('second', e.hh_inicio - it_ca.hh_control))
-),
-/*
-Get all indicators for the Expedition based on the Itinerary and Vehicle.
-
-Similar to the above query with the difference that here it takes in count only the ones that were not included in the
-conditions for Asignacion1a. The only condition is the fulfillment of the control point to be greater than 0.65.
-*/
-asignacion1b as(
+cruce_it1 as (
     select
-    	e.id_contrato,
-        e.id_expedicion,
-        e.id_pc,
-        e.id_vehiculo,
-        e.id_servicio,
-        e.id_sentido,
-        e.hh_inicio,
-        e.hh_fin,
-    	e.kpi_cumplimiento_pc as kpi_pc,
-    	it_ca.operacion_programada,
-    	case when it_ca.operacion_programada = 1 then 1 else 0 end as kpi_itd,
-    	null::float as kpi_ith,
-    	it_ca.t_max,
-    	(86400*date_part('day', e.hh_fin - e.hh_inicio) + 3600*date_part('hour', e.hh_fin - e.hh_inicio) +
-    		60*date_part('minute', e.hh_fin - e.hh_inicio) + date_part('second', e.hh_fin - e.hh_inicio))/60/it_ca.t_max as kpi_tv,
-    	case when ve_ca.id_vehiculo is not null then 1::float else 0::float end as kpi_ve
-    from expedicion as e
-    left join asignacion1a as a1a
-        on e.id_expedicion = a1a.id_expedicion
-    	and e.id_contrato = a1a.id_contrato
-    left join (select fe_fecha, id_pc, id_servicio, id_sentido, operacion_programada, max(t_max) t_max
-			   from it_ca group by fe_fecha, id_pc, id_servicio, id_sentido, operacion_programada) as it_ca
-    	on e.hh_inicio::date = it_ca.fe_fecha
-        and e.id_pc = it_ca.id_pc
-        and e.id_servicio = it_ca.id_servicio
-        and e.id_sentido = it_ca.id_sentido
-	left join ve_ca
-    	on  ve_ca.fe_fecha = e.hh_inicio::date
-    	and ve_ca.id_pc = e.id_pc
-    	and ve_ca.id_servicio = e.id_servicio
-    	and ve_ca.id_vehiculo = e.id_vehiculo
-    where e.kpi_cumplimiento_pc >= 0.65
-        and a1a.id_expedicion is null
-),
-/*
-Uses Asignacion1a and Asignacion1b to creates a new table with both results.
-*/
-indicadores as(
+        distinct on( id_vehiculo, id_expedicion )
+        id_it_ca,
+    	id_vehiculo,
+        id_expedicion,
+    	hh_inicio::date as fe_fecha
+    from (
         select
-    		it_ca.id_contrato,
-            it_ca.fe_fecha,
-            it_ca.id_servicio,
-            it_ca.id_sentido,
-            it_ca.hh_control::time,
+            distinct on( it_ca.id_it_ca )
             it_ca.id_it_ca,
-            a1a.id_expedicion,
-    		a1a.id_vehiculo,
-    		a1a.hh_inicio::time as hh_inicio,
-    		a1a.hh_fin::time as hh_fin,
-            a1a.kpi_pc,
-            a1a.kpi_tv,
-            a1a.kpi_ve,
-            a1a.kpi_itd,
-            a1a.kpi_ith
-        from it_ca
-        left join asignacion1a as a1a
-            on a1a.id_it_ca = it_ca.id_it_ca
-        where it_ca.operacion_programada = 1
-            and it_ca.n_pc = 1
+            e.id_expedicion,
+        	e.id_vehiculo,
+            it_ca.hh_control,
+            e.hh_inicio
+        from
+            it_ca
+        inner join (
+            select
+                id_pc,
+            	id_vehiculo,
+                id_expedicion,
+                id_servicio,
+                id_sentido,
+                hh_inicio
+            from
+                expedicion
+            where
+            	kpi_cumplimiento_pc = 1
+        ) as e on
+            e.hh_inicio::date 	= it_ca.fe_fecha and
+            e.id_pc 			= it_ca.id_pc and
+            e.id_servicio 		= it_ca.id_servicio and
+            e.id_sentido 		= it_ca.id_sentido and
+            e.hh_inicio between
+                it_ca.hh_control - ( 3 * it_ca.adelanto * interval '1 minute' ) and
+                it_ca.hh_control + ( 3 * it_ca.atraso   * interval '1 minute' )
+        where
+            it_ca.operacion_programada = 1 and
+            it_ca.adelanto 	is not null and
+            it_ca.atraso	is not null
+        order by
+            it_ca.id_it_ca,
+            abs(
+                date_part( 'day'    , e.hh_inicio - it_ca.hh_control ) * 86400 +
+                date_part( 'hour'   , e.hh_inicio - it_ca.hh_control ) * 3600 +
+                date_part( 'minute' , e.hh_inicio - it_ca.hh_control ) * 60 +
+                date_part( 'second' , e.hh_inicio - it_ca.hh_control )
+            )
+    ) as t
+    order by
+        id_vehiculo, id_expedicion,
+        abs(
+            date_part( 'day'    , hh_inicio - hh_control ) * 86400 +
+            date_part( 'hour'   , hh_inicio - hh_control ) * 3600 +
+            date_part( 'minute' , hh_inicio - hh_control ) * 60 +
+            date_part( 'second' , hh_inicio - hh_control )
+        )
+),
+cruce_it2 as (
+    select * from cruce_it1 as c1
     union all
+    select * from (
         select
-    		id_contrato,
-            hh_inicio::date as fe_fecha,
+            distinct on( id_vehiculo, id_expedicion )
+            id_it_ca,
+        	id_vehiculo,
+            id_expedicion,
+    		hh_inicio::date as fe_fecha
+        from (
+            select
+                distinct on( it_ca.id_it_ca )
+                it_ca.id_it_ca,
+        		e.id_vehiculo,
+                e.id_expedicion,
+                it_ca.hh_control,
+                e.hh_inicio
+            from (
+                select
+                    it_ca.id_it_ca,
+                    it_ca.fe_fecha,
+                    it_ca.operacion_programada,
+                    it_ca.id_pc,
+                    it_ca.id_servicio,
+                    it_ca.id_sentido,
+                    it_ca.hh_control,
+                    it_ca.adelanto,
+                    it_ca.atraso
+                from it_ca
+                left outer join cruce_it1 as c on
+                    it_ca.id_it_ca = c.id_it_ca
+                where c.id_it_ca is null
+            ) as it_ca
+            inner join (
+                select
+                    e.id_pc,
+        			e.id_vehiculo,
+                    e.id_expedicion,
+                    e.id_servicio,
+                    e.id_sentido,
+                    e.hh_inicio
+                from
+                    expedicion as e
+                left outer join cruce_it1 as c on
+                	e.id_vehiculo = c.id_vehiculo and
+                    e.id_expedicion = c.id_expedicion
+                where
+                    c.id_expedicion is null and
+                    e.kpi_cumplimiento_pc = 1
+            ) as e on
+                e.hh_inicio::date 	= it_ca.fe_fecha and
+                e.id_pc 			= it_ca.id_pc and
+                e.id_servicio 		= it_ca.id_servicio and
+                e.id_sentido 		= it_ca.id_sentido and
+                e.hh_inicio between
+                    it_ca.hh_control - ( 3 * it_ca.adelanto * interval '1 minute' ) and
+                    it_ca.hh_control + ( 3 * it_ca.atraso   * interval '1 minute' )
+            where
+                it_ca.operacion_programada = 1 and
+                it_ca.adelanto 	is not null and
+                it_ca.atraso	is not null
+            order by
+                it_ca.id_it_ca,
+                abs(
+                    date_part( 'day'    , e.hh_inicio - it_ca.hh_control ) * 86400 +
+                    date_part( 'hour'   , e.hh_inicio - it_ca.hh_control ) * 3600 +
+                    date_part( 'minute' , e.hh_inicio - it_ca.hh_control ) * 60 +
+                    date_part( 'second' , e.hh_inicio - it_ca.hh_control )
+                )
+        ) as t
+        order by
+            id_vehiculo, id_expedicion,
+            abs(
+                date_part( 'day'    , hh_inicio - hh_control ) * 86400 +
+                date_part( 'hour'   , hh_inicio - hh_control ) * 3600 +
+                date_part( 'minute' , hh_inicio - hh_control ) * 60 +
+                date_part( 'second' , hh_inicio - hh_control )
+            )
+    ) as c2
+),
+cruce_it3 as (
+    select * from cruce_it2 as c2
+    union all
+    select * from (
+        select
+            distinct on( id_vehiculo, id_expedicion )
+            id_it_ca,
+        	id_vehiculo,
+            id_expedicion,
+    		hh_inicio::date as fe_fecha
+        from (
+            select
+                distinct on( it_ca.id_it_ca )
+                it_ca.id_it_ca,
+        		e.id_vehiculo,
+                e.id_expedicion,
+                it_ca.hh_control,
+                e.hh_inicio
+            from (
+                select
+                    it_ca.id_it_ca,
+                    it_ca.fe_fecha,
+                    it_ca.operacion_programada,
+                    it_ca.id_pc,
+                    it_ca.id_servicio,
+                    it_ca.id_sentido,
+                    it_ca.hh_control,
+                    it_ca.adelanto,
+                    it_ca.atraso
+                from it_ca
+                left outer join cruce_it2 as c on
+                    it_ca.id_it_ca = c.id_it_ca
+                where c.id_it_ca is null
+            ) as it_ca
+            inner join (
+                select
+                    e.id_pc,
+        			e.id_vehiculo,
+                    e.id_expedicion,
+                    e.id_servicio,
+                    e.id_sentido,
+                    e.hh_inicio
+                from
+                    expedicion as e
+                left outer join cruce_it2 as c on
+                    e.id_vehiculo = c.id_vehiculo and
+                    e.id_expedicion = c.id_expedicion
+                where
+                    c.id_expedicion is null and
+                    e.kpi_cumplimiento_pc = 1
+            ) as e on
+                e.hh_inicio::date 	= it_ca.fe_fecha and
+                e.id_pc 			= it_ca.id_pc and
+                e.id_servicio 		= it_ca.id_servicio and
+                e.id_sentido 		= it_ca.id_sentido and
+                e.hh_inicio between
+                    it_ca.hh_control - ( 3 * it_ca.adelanto * interval '1 minute' ) and
+                    it_ca.hh_control + ( 3 * it_ca.atraso   * interval '1 minute' )
+            where
+                it_ca.operacion_programada = 1 and
+                it_ca.adelanto 	is not null and
+                it_ca.atraso	is not null
+            order by
+                it_ca.id_it_ca,
+                abs(
+                    date_part( 'day'    , e.hh_inicio - it_ca.hh_control ) * 86400 +
+                    date_part( 'hour'   , e.hh_inicio - it_ca.hh_control ) * 3600 +
+                    date_part( 'minute' , e.hh_inicio - it_ca.hh_control ) * 60 +
+                    date_part( 'second' , e.hh_inicio - it_ca.hh_control )
+                )
+        ) as t
+        order by
+            id_vehiculo, id_expedicion,
+            abs(
+                date_part( 'day'    , hh_inicio - hh_control ) * 86400 +
+                date_part( 'hour'   , hh_inicio - hh_control ) * 3600 +
+                date_part( 'minute' , hh_inicio - hh_control ) * 60 +
+                date_part( 'second' , hh_inicio - hh_control )
+            )
+    ) as c3
+),
+cruce as (
+    select * from cruce_it3 as c3
+    union all
+    select * from (
+        select
+            distinct on( id_vehiculo, id_expedicion ) 
+            id_it_ca,
+        	id_vehiculo,
+            id_expedicion,
+    		hh_inicio::date as fe_fecha
+        from (
+            select
+                distinct on( it_ca.id_it_ca )
+                it_ca.id_it_ca,
+        		e.id_vehiculo,
+                e.id_expedicion,
+                it_ca.hh_control,
+                e.hh_inicio
+            from (
+                select
+                    it_ca.id_it_ca,
+                    it_ca.fe_fecha,
+                    it_ca.operacion_programada,
+                    it_ca.id_pc,
+                    it_ca.id_servicio,
+                    it_ca.id_sentido,
+                    it_ca.hh_control,
+                    it_ca.adelanto,
+                    it_ca.atraso
+                from it_ca
+                left outer join cruce_it3 as c on
+                    it_ca.id_it_ca = c.id_it_ca
+                where c.id_it_ca is null
+            ) as it_ca
+            inner join (
+                select
+                    e.id_pc,
+        			e.id_vehiculo,
+                    e.id_expedicion,
+                    e.id_servicio,
+                    e.id_sentido,
+                    e.hh_inicio
+                from
+                    expedicion as e
+                left outer join cruce_it3 as c on
+                    e.id_vehiculo = c.id_vehiculo and
+                    e.id_expedicion = c.id_expedicion
+                where
+                    c.id_expedicion is null and
+                    e.kpi_cumplimiento_pc = 1
+            ) as e on
+                e.hh_inicio::date 	= it_ca.fe_fecha and
+                e.id_pc 			= it_ca.id_pc and
+                e.id_servicio 		= it_ca.id_servicio and
+                e.id_sentido 		= it_ca.id_sentido and
+                e.hh_inicio between
+                    it_ca.hh_control - ( 3 * it_ca.adelanto * interval '1 minute' ) and
+                    it_ca.hh_control + ( 3 * it_ca.atraso   * interval '1 minute' )
+            where
+                it_ca.operacion_programada = 1 and
+                it_ca.adelanto 	is not null and
+                it_ca.atraso	is not null
+            order by
+                it_ca.id_it_ca,
+                abs(
+                    date_part( 'day'    , e.hh_inicio - it_ca.hh_control ) * 86400 +
+                    date_part( 'hour'   , e.hh_inicio - it_ca.hh_control ) * 3600 +
+                    date_part( 'minute' , e.hh_inicio - it_ca.hh_control ) * 60 +
+                    date_part( 'second' , e.hh_inicio - it_ca.hh_control )
+                )
+        ) as t
+        order by
+            id_vehiculo, id_expedicion,
+            abs(
+                date_part( 'day'    , hh_inicio - hh_control ) * 86400 +
+                date_part( 'hour'   , hh_inicio - hh_control ) * 3600 +
+                date_part( 'minute' , hh_inicio - hh_control ) * 60 +
+                date_part( 'second' , hh_inicio - hh_control )
+            )
+    ) as c4
+),
+indicadores as(
+    select
+        coalesce(it_ca.id_contrato, e.id_contrato) as id_contrato,
+    	coalesce(it_ca.fe_fecha, e.hh_inicio::date) as fe_fecha,
+    	coalesce(it_ca.id_servicio, e.id_servicio) as id_servicio,
+    	coalesce(it_ca.id_sentido, e.id_sentido) as id_sentido,
+    	it_ca.hh_control::time,
+        it_ca.id_it_ca,
+    	cnc.id_vehiculo,
+    	cnc.id_expedicion,
+    	e.hh_inicio::time as hh_inicio,
+    	e.hh_fin::time as hh_fin,
+    	e.kpi_cumplimiento_pc as kpi_pc,
+    		(date_part('day',    e.hh_fin - e.hh_inicio) * 86400 +
+			date_part('hour',   e.hh_fin - e.hh_inicio) * 3600 +
+			date_part('minute', e.hh_fin - e.hh_inicio) * 60 +
+			date_part('second', e.hh_fin - e.hh_inicio)) / 60 / coalesce(it_ca.t_max, cnc.t_max_agg)
+    	as kpi_tv,
+    		case
+    			when cnc.id_expedicion is null then null
+    			when ve_ca.id_vehiculo is null then 0::float
+    			else 1::float
+    		end
+    	as kpi_ve,
+            case
+    			when it_ca.id_it_ca is null then 0
+                when e.hh_inicio < it_ca.hh_control
+                then (date_part('day', 	  e.hh_inicio - it_ca.hh_control) * 86400 +
+                      date_part('hour',   e.hh_inicio - it_ca.hh_control) * 3600 + 
+                      date_part('minute', e.hh_inicio - it_ca.hh_control) * 60 +
+                      date_part('second', e.hh_inicio - it_ca.hh_control)) / (60 * it_ca.adelanto)
+                else (date_part('day',    e.hh_inicio - it_ca.hh_control) * 86400 +
+                      date_part('hour',   e.hh_inicio - it_ca.hh_control) * 3600 +
+                      date_part('minute', e.hh_inicio - it_ca.hh_control) * 60 +
+                      date_part('second', e.hh_inicio - it_ca.hh_control)) / (60 * it_ca.atraso)
+            end
+    	as kpi_ith,
+    		case
+    			when cnc.id_expedicion is null then null
+    			else coalesce(cnc.operacion_programada_agg, 1)
+    		end
+    	as kpi_itd
+    from (
+        /*
+        cnc (cruce + nocruce) Get all indicators for the Expedition based on the Itinerary and Vehicle.
+        Similar to the above query with the difference that here it takes in count only the ones that were not included in the
+        conditions for Asignacion1a. The only condition is the fulfillment of the control point to be greater than 0.65.
+        */
+        select
+			id_it_ca,
+			id_vehiculo,
+			id_expedicion,
+        	fe_fecha,
+        	null as operacion_programada_agg,
+			null as t_max_agg
+        from
+        	cruce
+        union all
+        select * from (
+            select
+                null as id_it_ca,
+                e.id_vehiculo,
+                e.id_expedicion,
+            	e.hh_inicio as fe_fecha,
+                it_agg.operacion_programada as operacion_programada_agg,
+                it_agg.t_max as t_max_agg
+            from
+                expedicion as e
+            left join cruce as c on
+                e.id_vehiculo = c.id_vehiculo and
+                e.id_expedicion = c.id_expedicion
+            left join (
+                select distinct on(fe_fecha, id_pc, id_servicio, id_sentido)
+                    fe_fecha,
+                    id_pc,
+                    id_servicio,
+                    id_sentido,
+                    operacion_programada,
+                    max(t_max) t_max
+                from
+                    it_ca
+                group by
+                    fe_fecha,
+                    id_pc,
+                    id_servicio,
+                    id_sentido,
+                    operacion_programada
+                order by
+                    fe_fecha,
+                    id_pc,
+                    id_servicio,
+                    id_sentido,
+                    operacion_programada desc
+            ) as it_agg on
+                e.hh_inicio::date = it_agg.fe_fecha and
+                e.id_pc = it_agg.id_pc and
+                e.id_servicio = it_agg.id_servicio and
+                e.id_sentido = it_agg.id_sentido
+            where
+                e.kpi_cumplimiento_pc >= 0.65 and
+                c.id_expedicion is null
+        ) as nocruce
+    ) as cnc
+    full join (
+        select
+        	id_contrato,
+            fe_fecha,
             id_servicio,
             id_sentido,
-            null as hh_control,
-            null as id_it_ca,
-            id_expedicion,
-    		id_vehiculo,
-    		hh_inicio::time as hh_inicio,
-    		hh_fin::time as hh_fin,
-            kpi_pc,
-            kpi_tv,
-            kpi_ve,
-            kpi_itd,
-            kpi_ith
-        from asignacion1b
-    order by fe_fecha, id_servicio, id_sentido, hh_control, hh_inicio
+            hh_control,
+            id_it_ca,
+        	t_max,
+            adelanto,
+            atraso
+        from
+        	it_ca
+        where
+        	operacion_programada = 1
+    ) as it_ca on
+    	cnc.id_it_ca = it_ca.id_it_ca
+    left join expedicion as e on
+    	cnc.id_vehiculo = e.id_vehiculo and
+    	cnc.id_expedicion = e.id_expedicion
+	left join ve_ca on
+		cnc.fe_fecha = ve_ca.fe_fecha and
+        e.id_pc = ve_ca.id_pc and
+        e.id_servicio = ve_ca.id_servicio and
+        e.id_vehiculo =ve_ca.id_vehiculo
 )
 /*
 Insert all processed data into Indicators Dataset with their respective information.
@@ -367,4 +661,4 @@ SELECT
         else null
     end as rn_estado_horario
 from indicadores
-order by id_servicio, id_sentido, fe_fecha, hh_control, hh_inicio
+order by id_servicio, id_sentido, fe_fecha, coalesce(hh_control, hh_inicio)
