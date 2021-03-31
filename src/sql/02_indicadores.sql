@@ -158,7 +158,7 @@ cruce_it1 as (
             distinct on( it_ca.id_it_ca )
             it_ca.id_it_ca,
             e.id_expedicion,
-        	e.id_vehiculo,
+            e.id_vehiculo,
             it_ca.hh_control,
             e.hh_inicio
         from
@@ -209,17 +209,16 @@ cruce_it2 as (
     select * from cruce_it1 as c1
     union all
     select * from (
-        select
-            distinct on( id_vehiculo, id_expedicion )
+        select distinct on( id_vehiculo, id_expedicion )
             id_it_ca,
-        	id_vehiculo,
+            id_vehiculo,
             id_expedicion,
-    		hh_inicio::date as fe_fecha
+    	    hh_inicio::date as fe_fecha
         from (
             select
                 distinct on( it_ca.id_it_ca )
                 it_ca.id_it_ca,
-        		e.id_vehiculo,
+        	e.id_vehiculo,
                 e.id_expedicion,
                 it_ca.hh_control,
                 e.hh_inicio
@@ -242,7 +241,7 @@ cruce_it2 as (
             inner join (
                 select
                     e.id_pc,
-        			e.id_vehiculo,
+        	    e.id_vehiculo,
                     e.id_expedicion,
                     e.id_servicio,
                     e.id_sentido,
@@ -250,14 +249,14 @@ cruce_it2 as (
                 from
                     expedicion as e
                 left outer join cruce_it1 as c on
-                	e.id_vehiculo = c.id_vehiculo and
+                    e.id_vehiculo = c.id_vehiculo and
                     e.id_expedicion = c.id_expedicion
                 where
                     c.id_expedicion is null and
                     e.kpi_cumplimiento_pc = 1
             ) as e on
                 e.hh_inicio::date 	= it_ca.fe_fecha and
-                e.id_pc 			= it_ca.id_pc and
+                e.id_pc 		= it_ca.id_pc and
                 e.id_servicio 		= it_ca.id_servicio and
                 e.id_sentido 		= it_ca.id_sentido and
                 e.hh_inicio between
@@ -293,14 +292,14 @@ cruce_it3 as (
         select
             distinct on( id_vehiculo, id_expedicion )
             id_it_ca,
-        	id_vehiculo,
+            id_vehiculo,
             id_expedicion,
-    		hh_inicio::date as fe_fecha
+    	    hh_inicio::date as fe_fecha
         from (
             select
                 distinct on( it_ca.id_it_ca )
                 it_ca.id_it_ca,
-        		e.id_vehiculo,
+        	e.id_vehiculo,
                 e.id_expedicion,
                 it_ca.hh_control,
                 e.hh_inicio
@@ -323,7 +322,7 @@ cruce_it3 as (
             inner join (
                 select
                     e.id_pc,
-        			e.id_vehiculo,
+        	    e.id_vehiculo,
                     e.id_expedicion,
                     e.id_servicio,
                     e.id_sentido,
@@ -338,7 +337,7 @@ cruce_it3 as (
                     e.kpi_cumplimiento_pc = 1
             ) as e on
                 e.hh_inicio::date 	= it_ca.fe_fecha and
-                e.id_pc 			= it_ca.id_pc and
+                e.id_pc 		= it_ca.id_pc and
                 e.id_servicio 		= it_ca.id_servicio and
                 e.id_sentido 		= it_ca.id_sentido and
                 e.hh_inicio between
@@ -374,14 +373,14 @@ cruce as (
         select
             distinct on( id_vehiculo, id_expedicion ) 
             id_it_ca,
-        	id_vehiculo,
+            id_vehiculo,
             id_expedicion,
-    		hh_inicio::date as fe_fecha
+    	    hh_inicio::date as fe_fecha
         from (
             select
                 distinct on( it_ca.id_it_ca )
                 it_ca.id_it_ca,
-        		e.id_vehiculo,
+        	e.id_vehiculo,
                 e.id_expedicion,
                 it_ca.hh_control,
                 e.hh_inicio
@@ -404,7 +403,7 @@ cruce as (
             inner join (
                 select
                     e.id_pc,
-        			e.id_vehiculo,
+        	    e.id_vehiculo,
                     e.id_expedicion,
                     e.id_servicio,
                     e.id_sentido,
@@ -419,7 +418,7 @@ cruce as (
                     e.kpi_cumplimiento_pc = 1
             ) as e on
                 e.hh_inicio::date 	= it_ca.fe_fecha and
-                e.id_pc 			= it_ca.id_pc and
+                e.id_pc 		= it_ca.id_pc and
                 e.id_servicio 		= it_ca.id_servicio and
                 e.id_sentido 		= it_ca.id_sentido and
                 e.hh_inicio between
@@ -497,12 +496,12 @@ indicadores as(
         conditions for Asignacion1a. The only condition is the fulfillment of the control point to be greater than 0.65.
         */
         select
-			id_it_ca,
-			id_vehiculo,
-			id_expedicion,
+		id_it_ca,
+		id_vehiculo,
+		id_expedicion,
         	fe_fecha,
         	null as operacion_programada_agg,
-			null as t_max_agg
+		null as t_max_agg
         from
         	cruce
         union all
@@ -552,30 +551,30 @@ indicadores as(
         ) as nocruce
     ) as cnc
     full join (
-        select
-        	id_contrato,
-            fe_fecha,
-            id_servicio,
-            id_sentido,
-            hh_control,
-            id_it_ca,
-        	t_max,
-            adelanto,
-            atraso
+	select
+		id_contrato,
+		fe_fecha,
+		id_servicio,
+		id_sentido,
+		hh_control,
+		id_it_ca,
+		t_max,
+		adelanto,
+		atraso
         from
         	it_ca
         where
         	operacion_programada = 1
     ) as it_ca on
-    	cnc.id_it_ca = it_ca.id_it_ca
+	cnc.id_it_ca = it_ca.id_it_ca
     left join expedicion as e on
     	cnc.id_vehiculo = e.id_vehiculo and
     	cnc.id_expedicion = e.id_expedicion
 	left join ve_ca on
 		cnc.fe_fecha = ve_ca.fe_fecha and
-        e.id_pc = ve_ca.id_pc and
-        e.id_servicio = ve_ca.id_servicio and
-        e.id_vehiculo =ve_ca.id_vehiculo
+        	e.id_pc = ve_ca.id_pc and
+        	e.id_servicio = ve_ca.id_servicio and
+        	e.id_vehiculo =ve_ca.id_vehiculo
 )
 /*
 Insert all processed data into Indicators Dataset with their respective information.
@@ -600,12 +599,12 @@ INSERT INTO {indicators_dataset} (
     rn_estado_mes,
     kpi_cumplimiento_dia,
     rn_estado_dia,
-	kpi_cumplimiento_horario,
+    kpi_cumplimiento_horario,
     rn_estado_horario
 )
 SELECT
-	'{dataset_name}' as dataset_name,
-	'{gps_dataset}' as dataset_table_name,
+    '{dataset_name}' as dataset_name,
+    '{gps_dataset}' as dataset_table_name,
     id_contrato,
     id_servicio,
     id_sentido,
