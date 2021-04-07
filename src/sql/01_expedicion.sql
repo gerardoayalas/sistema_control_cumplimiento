@@ -93,54 +93,40 @@ pc_ca as (
 ),
 
 expedicion_pc as (
-/*Cleaning data 2*/
-select
-    fe_fecha,
-    id_pc,
-    id_vehiculo,
-    id_servicio,
-    id_sentido,
-    id_expedicion,
-    n_pc,
-    max_pc,
-    id_gps,
-    fechahora_local,
-    basura
-from (
-	/*Cleaning data and complete the remaining data with the GPS dataset data.*/
-	select distinct on (eid.id_pc, eid.id_vehiculo, eid.id_servicio, eid.id_sentido, eid.id_expedicion, eid.n_pc)    
-		eid.fe_fecha,
-		eid.id_pc,
-		eid.id_vehiculo,
-        eid.id_servicio,
-        eid.id_sentido,
-        eid.id_expedicion,
-        eid.n_pc,
-        pc_data.max_pc,
-        case
-            when (max(n_pc) over (partition by eid.id_expedicion order by eid.id_gps rows between unbounded preceding and current row)) = pc_data.max_pc and eid.n_pc < pc_data.max_pc
-            then 1 else 0
-        end as post_max_pc,
-        eid.id_gps,
-        gps.fechahora_local,
-        eid.basura
-    from (
-/*4.2 EXPEDICION_ID: START*/
-	/*Get Expedition data and adding a unique ID for the expedition event*/
-		select
-			fe_fecha,
-			id_pc,
-			id_vehiculo,
-			id_servicio,
-			id_sentido,
-			n_pc,
-			id_gps,
-			inicio_recorrido,
-			sum(inicio_recorrido) over (order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps rows between unbounded preceding and current row) as id_expedicion,
-			basura
+	/*Cleaning data 2*/
+	select
+		fe_fecha,
+		id_pc,
+		id_vehiculo,
+		id_servicio,
+		id_sentido,
+		id_expedicion,
+		n_pc,
+		max_pc,
+		id_gps,
+		fechahora_local,
+		basura
+	from (
+		/*Cleaning data and complete the remaining data with the GPS dataset data.*/
+		select distinct on (eid.id_pc, eid.id_vehiculo, eid.id_servicio, eid.id_sentido, eid.id_expedicion, eid.n_pc)    
+			eid.fe_fecha,
+			eid.id_pc,
+			eid.id_vehiculo,
+			eid.id_servicio,
+			eid.id_sentido,
+			eid.id_expedicion,
+			eid.n_pc,
+			pc_data.max_pc,
+			case
+				when (max(n_pc) over (partition by eid.id_expedicion order by eid.id_gps rows between unbounded preceding and current row)) = pc_data.max_pc and eid.n_pc < pc_data.max_pc
+				then 1 else 0
+			end as post_max_pc,
+			eid.id_gps,
+			gps.fechahora_local,
+			eid.basura
 		from (
-/*4.1 EVENTO_RECORRIDO: START*/
-			/*Get the start of the Event's path.*/
+	/*4.2 EXPEDICION_ID: START*/
+		/*Get Expedition data and adding a unique ID for the expedition event*/
 			select
 				fe_fecha,
 				id_pc,
@@ -149,24 +135,12 @@ from (
 				id_sentido,
 				n_pc,
 				id_gps,
-				case
-					when n_pc = 1 then 1
-					when id_pc != lag(id_pc,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
-					when id_vehiculo != lag(id_vehiculo,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
-					when id_servicio != lag(id_servicio,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
-					when id_sentido != lag(id_sentido,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
-					else 0
-				end as inicio_recorrido,
-				case
-					when n_pc = 1 then 0 when id_pc != lag(id_pc,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
-					when id_vehiculo != lag(id_vehiculo,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
-					when id_servicio != lag(id_servicio,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
-					when id_sentido != lag(id_sentido,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
-					else 0
-				end as basura
+				inicio_recorrido,
+				sum(inicio_recorrido) over (order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps rows between unbounded preceding and current row) as id_expedicion,
+				basura
 			from (
-/*3.2 EVENTO_VALIDO:START*/
-				/*Check the Event PC validity.*/
+	/*4.1 EVENTO_RECORRIDO: START*/
+				/*Get the start of the Event's path.*/
 				select
 					fe_fecha,
 					id_pc,
@@ -176,16 +150,23 @@ from (
 					n_pc,
 					id_gps,
 					case
-						when n_pc != 1 or n_pc = lead(n_pc,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido order by id_pc, id_vehiculo, id_servicio, id_gps) then false
-						else true
-					end as inicio_valido,
+						when n_pc = 1 then 1
+						when id_pc != lag(id_pc,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
+						when id_vehiculo != lag(id_vehiculo,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
+						when id_servicio != lag(id_servicio,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
+						when id_sentido != lag(id_sentido,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
+						else 0
+					end as inicio_recorrido,
 					case
-						when n_pc = 1 or n_pc = lag(n_pc,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido order by id_pc, id_vehiculo, id_servicio, id_gps) then false
-						else true
-					end as control_valido
+						when n_pc = 1 then 0 when id_pc != lag(id_pc,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
+						when id_vehiculo != lag(id_vehiculo,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
+						when id_servicio != lag(id_servicio,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
+						when id_sentido != lag(id_sentido,1) over(order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps) then 1
+						else 0
+					end as basura
 				from (
-/*3.1.2 EVENTO_PC: START*/
-					/*Event PC which determines event state for the given PC based on the GPS information.*/
+	/*3.2 EVENTO_VALIDO:START*/
+					/*Check the Event PC validity.*/
 					select
 						fe_fecha,
 						id_pc,
@@ -195,108 +176,127 @@ from (
 						n_pc,
 						id_gps,
 						case
-							when lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) is null
-								then case
-									when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
-										then 11
-									else 1
-								end
-							when lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) is null
-								then case
-									when id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
-										then 11
-									else -1
-								end
-							when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) and
-								id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
-								then 11
-							when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
-								then -1
-							when id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
-								then 1
-							else 0
-						end as estado_evento
+							when n_pc != 1 or n_pc = lead(n_pc,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido order by id_pc, id_vehiculo, id_servicio, id_gps) then false
+							else true
+						end as inicio_valido,
+						case
+							when n_pc = 1 or n_pc = lag(n_pc,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido order by id_pc, id_vehiculo, id_servicio, id_gps) then false
+							else true
+						end as control_valido
 					from (
-/*3.1.1 EVENTO_PC0: START*/
-						/*Get GPS for each day in PC_CA including if the GPS Point is within the PC_CA radius.*/
+	/*3.1.2 EVENTO_PC: START*/
+						/*Event PC which determines event state for the given PC based on the GPS information.*/
 						select
-							gps.fe_fecha,
-							pc_ca.id_pc,
-							gps.id_vehiculo,
-							pc_ca.id_servicio,
-							pc_ca.id_sentido,
-							pc_ca.n_pc,
-							gps.id_gps,
-							ST_DWithin(gps.point_gps::geography, pc_ca.point_pc::geography, pc_ca.radio) as dentro_pc
+							fe_fecha,
+							id_pc,
+							id_vehiculo,
+							id_servicio,
+							id_sentido,
+							n_pc,
+							id_gps,
+							case
+								when lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) is null
+									then case
+										when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
+											then 11
+										else 1
+									end
+								when lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) is null
+									then case
+										when id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
+											then 11
+										else -1
+									end
+								when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps) and
+									id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
+									then 11
+								when id_gps+1 < lead(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
+									then -1
+								when id_gps-1 > lag(id_gps,1) over(partition by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps)
+									then 1
+								else 0
+							end as estado_evento
 						from (
-/*2.1 GPS (1/2): START*/
-							/*Get bus id related data from GPS dataset and transforming longitude and latitude to a Point.*/
+	/*3.1.1 EVENTO_PC0: START*/
+							/*Get GPS for each day in PC_CA including if the GPS Point is within the PC_CA radius.*/
 							select
-								row_number () over(partition by ppu order by ppu, gps_fecha_hora_chile) as id_gps,
-								ppu as id_vehiculo,
-								gps_fecha_hora_chile::date as fe_fecha,
-								ST_MakePoint(gps_longitud::numeric, gps_latitud::numeric) as point_gps
-							from {gps_dataset}
-							where ppu = '{bus_id}'
-							order by ppu, gps_fecha_hora_chile
-/*2.1 GPS (1/2): END*/
-						) gps
-						join pc_ca on
-							gps.fe_fecha = pc_ca.fe_fecha and
-							ST_DWithin(gps.point_gps::geography, pc_ca.point_pc::geography, {max_radius})/*sacar valor de pc_ca (ojo que puede pegar en codigo python)*/
-/*3.1.1 EVENTO_PC0: END*/
-					) evento_pc0
-					where dentro_pc
-					order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps
-/*3.1.2 EVENTO_PC: END*/
-				) evento_pc
-				where (n_pc = 1 and (estado_evento = -1 or estado_evento = 11)) or
-					(n_pc != 1 and (estado_evento = 1 or estado_evento = 11))
-				order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps
-/*3.2 EVENTO_VALIDO: END*/
-			) evento_valido
-			where
-				inicio_valido or
-				control_valido
-			order by
-				id_pc,
-				id_vehiculo,
-				id_servicio,
-				id_sentido,
-				id_gps
-/*4.1 EVENTO RECORRIDO: END*/
-		) evento_recorrido
-		order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps
-/*4.2 EXPEDICION_ID: END*/
-	) eid
-	left join (
-		/*2.1 GPS (2/2): START*/
-		select
-			row_number () over(partition by ppu order by ppu, gps_fecha_hora_chile) as id_gps,
-			ppu as id_vehiculo,
-			gps_fecha_hora_chile as fechahora_local
-		from {gps_dataset}
-		where ppu = '{bus_id}'
-		order by gps_fecha_hora_chile
-		/*2.1 GPS (2/2): END*/
-	) gps
-	on eid.id_vehiculo = gps.id_vehiculo
-	and eid.id_gps = gps.id_gps
-	left join (
-		/*PC_DATA: START*/
-		select id_pc, id_servicio, id_sentido, max (n_pc) as max_pc
-		from pc_ca
-		group by id_pc, id_servicio, id_sentido
-		order by id_pc, id_servicio, id_sentido
-		/*PC_DATA: START*/
-	) as pc_data on
-		eid.id_pc = pc_data.id_pc and
-		eid.id_servicio = pc_data.id_servicio and
-		eid.id_sentido = pc_data.id_sentido
-	order by eid.id_pc, eid.id_vehiculo, eid.id_servicio, eid.id_sentido, eid.id_expedicion, eid.n_pc, eid.id_gps
-) epc
-where
-    post_max_pc = 0
+								gps.fe_fecha,
+								pc_ca.id_pc,
+								gps.id_vehiculo,
+								pc_ca.id_servicio,
+								pc_ca.id_sentido,
+								pc_ca.n_pc,
+								gps.id_gps,
+								ST_DWithin(gps.point_gps::geography, pc_ca.point_pc::geography, pc_ca.radio) as dentro_pc
+							from (
+	/*2.1 GPS (1/2): START*/
+								/*Get bus id related data from GPS dataset and transforming longitude and latitude to a Point.*/
+								select
+									row_number () over(partition by ppu order by ppu, gps_fecha_hora_chile) as id_gps,
+									ppu as id_vehiculo,
+									gps_fecha_hora_chile::date as fe_fecha,
+									ST_MakePoint(gps_longitud::numeric, gps_latitud::numeric) as point_gps
+								from {gps_dataset}
+								where ppu = '{bus_id}'
+								order by ppu, gps_fecha_hora_chile
+	/*2.1 GPS (1/2): END*/
+							) gps
+							join pc_ca on
+								gps.fe_fecha = pc_ca.fe_fecha and
+								ST_DWithin(gps.point_gps::geography, pc_ca.point_pc::geography, {max_radius})/*sacar valor de pc_ca (ojo que puede pegar en codigo python)*/
+	/*3.1.1 EVENTO_PC0: END*/
+						) evento_pc0
+						where dentro_pc
+						order by id_pc, id_vehiculo, id_servicio, id_sentido, n_pc, id_gps
+	/*3.1.2 EVENTO_PC: END*/
+					) evento_pc
+					where (n_pc = 1 and (estado_evento = -1 or estado_evento = 11)) or
+						(n_pc != 1 and (estado_evento = 1 or estado_evento = 11))
+					order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps
+	/*3.2 EVENTO_VALIDO: END*/
+				) evento_valido
+				where
+					inicio_valido or
+					control_valido
+				order by
+					id_pc,
+					id_vehiculo,
+					id_servicio,
+					id_sentido,
+					id_gps
+	/*4.1 EVENTO RECORRIDO: END*/
+			) evento_recorrido
+			order by id_pc, id_vehiculo, id_servicio, id_sentido, id_gps
+	/*4.2 EXPEDICION_ID: END*/
+		) eid
+		left join (
+			/*2.1 GPS (2/2): START*/
+			select
+				row_number () over(partition by ppu order by ppu, gps_fecha_hora_chile) as id_gps,
+				ppu as id_vehiculo,
+				gps_fecha_hora_chile as fechahora_local
+			from {gps_dataset}
+			where ppu = '{bus_id}'
+			order by gps_fecha_hora_chile
+			/*2.1 GPS (2/2): END*/
+		) gps
+		on eid.id_vehiculo = gps.id_vehiculo
+		and eid.id_gps = gps.id_gps
+		left join (
+			/*PC_DATA: START*/
+			select id_pc, id_servicio, id_sentido, max (n_pc) as max_pc
+			from pc_ca
+			group by id_pc, id_servicio, id_sentido
+			order by id_pc, id_servicio, id_sentido
+			/*PC_DATA: START*/
+		) as pc_data on
+			eid.id_pc = pc_data.id_pc and
+			eid.id_servicio = pc_data.id_servicio and
+			eid.id_sentido = pc_data.id_sentido
+		order by eid.id_pc, eid.id_vehiculo, eid.id_servicio, eid.id_sentido, eid.id_expedicion, eid.n_pc, eid.id_gps
+	) epc
+	where
+		post_max_pc = 0
 ),
 
 expedicion as (
@@ -449,24 +449,24 @@ expedicion as (
 Insert description of query
 */
 insert_eventos_pasada as (
-insert into dataset_241052 (
-	dataset_name,
-    dataset_table_name,
-    id_contrato,
-	id_vehiculo,
-    id_expedicion,
-    id_pc,
-    id_servicio,
-    id_sentido,
-    hh_inicio,
-    n_pc,
-    evento_pasada,
-    hh_pasada
-)
+	INSERT INTO dataset_241052 (
+		dataset_name,
+		dataset_table_name,
+		id_contrato,
+		id_vehiculo,
+		id_expedicion,
+		id_pc,
+		id_servicio,
+		id_sentido,
+		hh_inicio,
+		n_pc,
+		evento_pasada,
+		hh_pasada
+	)
     select
-        null '{dataset_name}' as dataset_name,
-        null '{gps_dataset}' as dataset_table_name,
-        null '{contract_id}' as id_contrato,
+        e.dataset_name,
+        e.dataset_table_name,
+        e.id_contrato,
         e.id_vehiculo,
         e.id_expedicion,
         e.id_pc,
@@ -532,6 +532,3 @@ select
     hh_fin,
     kpi_cumplimiento_pc
 from expedicion
-
-
-
